@@ -28,13 +28,24 @@ export async function GET(request, { params }) {
     if (!projectId) {
       return NextResponse.json({ error: 'The project ID cannot be empty' }, { status: 400 });
     }
+    const { searchParams } = new URL(request.url);
+    const page = parseInt(searchParams.get('page')) || 1;
+    const pageSize = parseInt(searchParams.get('pageSize')) || 10; // 每页10个文件，支持分页
+    const fileName = searchParams.get('fileName') || '';
+    const getAllIds = searchParams.get('getAllIds') === 'true'; // 新增：获取所有文件ID的标志
 
+    // 如果请求所有文件ID，直接返回ID列表
+    if (getAllIds) {
+      const allFiles = await getUploadFilesPagination(projectId, 1, 9999, fileName); // 获取所有文件
+      const allFileIds = allFiles.data?.map(file => String(file.id)) || [];
+      return NextResponse.json({ allFileIds });
+    }
     // 获取文件列表
-    const files = await getUploadFilesPagination(projectId, 1, 10, '');
+    const files = await getUploadFilesPagination(projectId, page, pageSize, fileName);
 
     return NextResponse.json(files);
   } catch (error) {
-    console.error('Error obtaining file list:', error);
+    console.error('Error obtaining file list:', String(error));
     return NextResponse.json({ error: error.message || 'Error obtaining file list' }, { status: 500 });
   }
 }
@@ -82,6 +93,21 @@ export async function DELETE(request, { params }) {
     // 删除文件及其相关的文本块、问题和数据集
     const { stats, fileName, fileInfo } = await delUploadFileInfoById(fileId);
 
+    try {
+      const projectRoot = await getProjectRoot();
+      const projectPath = path.join(projectRoot, projectId);
+      const tocDir = path.join(projectPath, 'toc');
+      const baseName = path.basename(fileInfo.fileName, path.extname(fileInfo.fileName));
+      const tocPath = path.join(tocDir, `${baseName}-toc.json`);
+
+      // 检查文件是否存在再删除
+      await fs.unlink(tocPath);
+      console.log(`成功删除 TOC 文件: ${tocPath}`);
+    } catch (error) {
+      console.error(`删除 TOC 文件失败:`, String(error));
+      // 即使 TOC 文件删除失败，不影响整体结果
+    }
+
     // 如果选择了保持领域树不变，直接返回删除结果
     if (domainTreeAction === 'keep') {
       return NextResponse.json({
@@ -121,11 +147,8 @@ export async function DELETE(request, { params }) {
         deleteToc,
         project
       });
-
-      const tocPath = path.join(fileInfo.path, '../toc', fileInfo.fileName.replace('.md', '') + '-toc.json');
-      await fs.rm(tocPath, { recursive: true });
     } catch (error) {
-      console.error('Error updating domain tree after file deletion:', error);
+      console.error('Error updating domain tree after file deletion:', String(error));
       // 即使领域树更新失败，也不影响文件删除的结果
     }
 
@@ -136,7 +159,7 @@ export async function DELETE(request, { params }) {
       cascadeDelete: true
     });
   } catch (error) {
-    console.error('Error deleting file:', error);
+    console.error('Error deleting file:', String(error));
     return NextResponse.json({ error: error.message || 'Error deleting file' }, { status: 500 });
   }
 }
@@ -222,7 +245,7 @@ export async function POST(request, { params }) {
       fileId: fileInfo.id
     });
   } catch (error) {
-    console.error('Error processing file upload:', error);
+    console.error('Error processing file upload:', String(error));
     console.error('Error stack:', error.stack);
     return NextResponse.json(
       {
